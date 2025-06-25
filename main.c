@@ -29,6 +29,9 @@ void make_socket(struct sockaddr_in *server_ptr, int *server_sock_ptr, unsigned 
         printf("Error: failed to bind to port %d\n", port_no);
         exit(1);
     }
+
+    *server_sock_ptr = server_sock;
+    *server_ptr = server;
 }
 
 int main() {
