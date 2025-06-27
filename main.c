@@ -199,6 +199,11 @@ void monitor_fds(server_t *s) {
 }
 
 void handle_connection(server_t *s) {
+    if (listen(s->sockfd, 5) < 0) {
+        printf("Error: failed to listen on port %d\n", s->port);
+        exit(1);
+    }
+
     while (1) {
         s->readfds = s->active_fds;
         s->writefds = s->active_fds;
@@ -206,17 +211,23 @@ void handle_connection(server_t *s) {
     }
 }
 
-server_t *init_server(int port) {
+server_t *init_server(int port, int sockfd, struct sockaddr_in *server_addr) {
     server_t *s = (server_t *) malloc(sizeof(server_t));
     if (!s) {
         printf("Failed to allocate memory to the server.\n");
     }
 
     memset(s, 0, sizeof(server_t));
+    s->sockfd = sockfd;
     FD_ZERO(&s->active_fds);
     FD_ZERO(&s->readfds);
     FD_ZERO(&s->writefds);
     s->port = port;
+    s->addr = *server_addr;
+
+    FD_SET(s->sockfd, &s->active_fds);
+    s->max_fd = s->sockfd;
+
     return s;
 }
 
@@ -233,11 +244,11 @@ int main() {
       printf("Fork fail\n");
       exit(1);
     } else if (p == 0) {
-        server_t * receiving_server = init_server(DESTINATION_PORT);
+        server_t * receiving_server = init_server(DESTINATION_PORT, server_out_sock, &server_out);
         printf("Waiting on Port %d\n", DESTINATION_PORT);
         handle_connection(receiving_server);
     } else {
-        server_t * sending_server = init_server(SOURCE_PORT);
+        server_t * sending_server = init_server(SOURCE_PORT, server_in_sock, &server_in);
         printf("Waiting on Port %d\n", SOURCE_PORT);
         handle_connection(sending_server);
     }    
