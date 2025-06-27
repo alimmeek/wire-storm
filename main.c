@@ -6,11 +6,16 @@
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include "types.h"
 
 #define SOURCE_PORT 33333
 #define DESTINATION_PORT 44444
+
+
+server_t *receiving_server, *sending_server;
+pid_t p;
 
 
 void make_socket(struct sockaddr_in *server, int *server_sock_ptr, unsigned short port_no) {
@@ -135,7 +140,6 @@ void send_message(server_t *s, client_t *cli) {
             sprintf(buf, "client %d: ", cli->id);
             send_notification(s, cli->fd, buf);
             send_notification(s, cli->fd, msg);
-            free(msg);
         }
     }
 }
@@ -158,7 +162,7 @@ void process_message(server_t *s, int fd) {
     } else {
         buf[read_bytes] = '\0';
         cli->msg = str_join(cli->msg, buf);
-        send_message(s, cli);
+        printf("Got message from client %d\n", cli->id);
     }
 }
 
@@ -192,8 +196,9 @@ void monitor_fds(server_t *s) {
     }
     int fd = 0;
     while (fd <= s->max_fd) {
-        if (FD_ISSET(fd, &s->readfds))
+        if (FD_ISSET(fd, &s->readfds)) {
             (fd == s->sockfd) ? accept_registration(s) : process_message(s, fd);
+        }
         fd++;
     }
 }
@@ -231,24 +236,48 @@ server_t *init_server(int port, int sockfd, struct sockaddr_in *server_addr) {
     return s;
 }
 
+void free_clients(client_t *head) {
+    client_t *prev = head;
+    client_t *curr = head;
+
+    while (head != NULL) {
+        free(prev);
+        prev = curr;
+        curr = curr->next;
+    }
+    free(prev);
+}
+
+void signal_handler(int signal) {
+    if (p == 0) {
+        free_clients(receiving_server->head);
+        free(receiving_server);
+    } else if (p > 0) {
+        free_clients(sending_server->head);
+        free(sending_server);
+    }
+    exit(0);
+}
+
 int main() {
+    signal(SIGINT, signal_handler);
+
     struct sockaddr_in server_in, server_out;
     int server_in_sock, server_out_sock;
 
     make_socket(&server_in, &server_in_sock, SOURCE_PORT);
     make_socket(&server_out, &server_out_sock, DESTINATION_PORT);
 
-    pid_t p;
     p = fork();
     if(p<0) {
       printf("Fork fail\n");
       exit(1);
     } else if (p == 0) {
-        server_t * receiving_server = init_server(DESTINATION_PORT, server_out_sock, &server_out);
+        receiving_server = init_server(DESTINATION_PORT, server_out_sock, &server_out);
         printf("Waiting on Port %d\n", DESTINATION_PORT);
         handle_connection(receiving_server);
     } else {
-        server_t * sending_server = init_server(SOURCE_PORT, server_in_sock, &server_in);
+        sending_server = init_server(SOURCE_PORT, server_in_sock, &server_in);
         printf("Waiting on Port %d\n", SOURCE_PORT);
         handle_connection(sending_server);
     }    
