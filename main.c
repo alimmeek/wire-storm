@@ -3,6 +3,8 @@
 #include <string.h>
 #include <netdb.h>
 #include <sys/socket.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <unistd.h>
@@ -13,10 +15,9 @@
 #define SOURCE_PORT 33333
 #define DESTINATION_PORT 44444
 
-
 server_t *receiving_server, *sending_server;
 pid_t p;
-
+int msg_id;
 
 void make_socket(struct sockaddr_in *server, int *server_sock_ptr, unsigned short port_no) {
     int server_sock;
@@ -45,24 +46,23 @@ int validate_message(char **buf, char **msg) {
 
 char *str_join(char *buf, char *add) {
     char *newbuf;
-    int  len;
+    int len;
 
     if (buf == 0)
         len = 0;
     else
         len = strlen(buf);
 
-    newbuf = malloc(sizeof(*newbuf) * (len + strlen(add) + 1));
+    newbuf = malloc(len + strlen(add) + 1);
     if (newbuf == 0)
-        return (0);
+        return NULL;
 
-    newbuf[0] = 0;
+    newbuf[0] = '\0';
     if (buf != 0)
         strcat(newbuf, buf);
-
-    free(buf);
     strcat(newbuf, add);
-    return (newbuf);
+
+    return newbuf;
 }
 
 void free_client(client_t *cli) {
@@ -161,8 +161,20 @@ void process_message(server_t *s, int fd) {
         deregister_client(s, fd, cli->id);
     } else {
         buf[read_bytes] = '\0';
-        cli->msg = str_join(cli->msg, buf);
+        char *new_msg = str_join(cli->msg, buf);
+        free(cli->msg);
+        cli->msg = new_msg;
         printf("Got message from client %d\n", cli->id);
+        struct msg_buffer message;
+        memset(&message, 0, sizeof(message));
+        message.msg_type = 1;
+        snprintf(message.msg_text, sizeof(message.msg_text), "%s", cli->msg);
+
+        if (msgsnd(msg_id, &message, sizeof(message.msg_text), 0) < 0) {
+            printf("Error: failed to send message to message queue\n");
+        } else {
+            printf("Message sent to message queue\n");
+        }
     }
 }
 
@@ -175,8 +187,7 @@ void register_client(server_t *s, int fd) {
     FD_SET(cli->fd, &s->active_fds);
     if (cli->fd > s->max_fd)
         s->max_fd = cli->fd;
-    sprintf(buf, "server: client %d just arrived\n", cli->id);
-    send_notification(s, fd, buf);
+    printf("server: client %d just arrived\n", cli->id);
 }
 
 void accept_registration(server_t *s) {
@@ -197,7 +208,18 @@ void monitor_fds(server_t *s) {
     int fd = 0;
     while (fd <= s->max_fd) {
         if (FD_ISSET(fd, &s->readfds)) {
-            (fd == s->sockfd) ? accept_registration(s) : process_message(s, fd);
+            if (p == 0) {
+                if (fd == s->sockfd) {
+                    accept_registration(s);
+                } 
+
+                struct msg_buffer message;
+                if (msgrcv(msg_id, &message, sizeof(message.msg_text), 1, IPC_NOWAIT) >= 0) {
+                    printf("Received message from message queue: %s\n", message.msg_text);
+                }
+            } else {
+                (fd == s->sockfd) ? accept_registration(s) : process_message(s, fd);
+            }
         }
         fd++;
     }
@@ -237,21 +259,19 @@ server_t *init_server(int port, int sockfd, struct sockaddr_in *server_addr) {
 }
 
 void free_clients(client_t *head) {
-    client_t *prev = head;
     client_t *curr = head;
-
-    while (head != NULL) {
-        free(prev);
-        prev = curr;
-        curr = curr->next;
+    while (curr != NULL) {
+        client_t *next = curr->next;
+        free_client(curr);
+        curr = next;
     }
-    free(prev);
 }
 
 void signal_handler(int signal) {
     if (p == 0) {
         free_clients(receiving_server->head);
         free(receiving_server);
+        msgctl(msg_id, IPC_RMID, NULL);
     } else if (p > 0) {
         free_clients(sending_server->head);
         free(sending_server);
@@ -268,8 +288,16 @@ int main() {
     make_socket(&server_in, &server_in_sock, SOURCE_PORT);
     make_socket(&server_out, &server_out_sock, DESTINATION_PORT);
 
+    key_t key = ftok("main.c", 65);
+    msg_id = msgget(key, 0666 | IPC_CREAT);
+
+    if (msg_id < 0) {
+        printf("Error: failed to create message queue\n");
+        exit(1);
+    }
+
     p = fork();
-    if(p<0) {
+    if (p < 0) {
       printf("Fork fail\n");
       exit(1);
     } else if (p == 0) {

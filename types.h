@@ -27,4 +27,9 @@ typedef struct server {
     client_t *head;
 } server_t;
 
+struct msg_buffer {
+    long msg_type;
+    char msg_text[100];
+} message;
+
 #endif
