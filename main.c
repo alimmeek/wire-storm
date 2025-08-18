@@ -7,6 +7,9 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
+#define SOURCE_PORT 33333
+#define DEST_PORT 44444
+
 typedef struct s_client {
     int fd;
     int id;
@@ -227,20 +230,21 @@ void handleCon(t_server *s) {
 
 void bindAndListen(t_server *s) {
     (void)s;
- if ((bind(s->sockfd, (const struct sockaddr *)&s->addr, sizeof(s->addr)))) fatalError(s);
- if (listen(s->sockfd, SOMAXCONN)) fatalError(s);
+    if ((bind(s->sockfd, (const struct sockaddr *)&s->addr, sizeof(s->addr)))) fatalError(s);
+    printf("Server is listening on port %d\n", s->port);
+    if (listen(s->sockfd, SOMAXCONN)) fatalError(s);
 }
 
 void configAddr(t_server *s) {
- bzero(&s->addr, sizeof(s->addr)); 
- s->addr.sin_family = AF_INET; 
- s->addr.sin_addr.s_addr = htonl(2130706433);
- s->addr.sin_port = htons(s->port); 
+    bzero(&s->addr, sizeof(s->addr)); 
+    s->addr.sin_family = AF_INET; 
+    s->addr.sin_addr.s_addr = htonl(2130706433);
+    s->addr.sin_port = htons(s->port); 
 }
 
 void createSock(t_server *s) {
- s->sockfd = socket(AF_INET, SOCK_STREAM, 0); 
- if (s->sockfd < 0)  fatalError(s);
+    s->sockfd = socket(AF_INET, SOCK_STREAM, 0); 
+    if (s->sockfd < 0)  fatalError(s);
 
     FD_SET(s->sockfd, &s->active_fds);
     s->max_fd = s->sockfd;
@@ -257,14 +261,14 @@ t_server *initServer(int port) {
     return s;
 }
 
-int main(int ac, char **av) {
-    if (ac != 2) {
-        write(2, "Wrong number of argument\n", 26);
-        exit(1);
+int main() {
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("Fork failed");
+        exit(EXIT_FAILURE);
     }
-    int port = atoi(av[1]);
-    if (port <= 0 || port > 65535) fatalError(NULL);
-    t_server *serv = initServer(port);
+
+    t_server *serv = initServer(pid > 0 ? SOURCE_PORT : DEST_PORT);
     if (serv) {
         createSock(serv);
         configAddr(serv);
