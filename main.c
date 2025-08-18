@@ -16,6 +16,8 @@
  * https://medium.com/@oduwoledare/server-side-story-creating-a-multi-client-tcp-server-with-c-and-select-3692db1a8ca3)
 */
 
+int connected_devices;
+
 typedef struct client {
     int fd;
     int id;
@@ -36,63 +38,75 @@ typedef struct server {
 void fatal_error(server_t *s);
 
 int extract_message(char **buf, char **msg) {
-    char *newbuf;
+    char *new_buf;
     int i;
 
     *msg = 0;
-    if (*buf == 0)
+    if (*buf == 0) {
         return (0);
+    }
 
     i = 0;
 
-    while ((*buf)[i])
-    {
-        if ((*buf)[i] == '\n')
-        {
-            newbuf = calloc(1, sizeof(*newbuf) * (strlen(*buf + i + 1) + 1));
-            if (newbuf == 0)
-                return (-1);
-            strcpy(newbuf, *buf + i + 1);
+    while ((*buf)[i]) {
+        if ((*buf)[i] == '\n') {
+            new_buf = calloc(1, sizeof(*new_buf) * (strlen(*buf + i + 1) + 1));
+            if (new_buf == 0) {
+                return -1;
+            }
+
+            strcpy(new_buf, *buf + i + 1);
             *msg = *buf;
             (*msg)[i + 1] = 0;
-            *buf = newbuf;
-            return (1);
+            *buf = new_buf;
+            return 1;
         }
         i++;
     }
-    return (0);
+    return 0;
 }
 
 char *str_join(char *buf, char *add) {
-    char *newbuf;
+    char *new_buf;
     int  len;
 
-    if (buf == 0)
+    if (buf == 0) {
         len = 0;
-    else
+    } else {
         len = strlen(buf);
-    newbuf = malloc(sizeof(*newbuf) * (len + strlen(add) + 1));
-    if (newbuf == 0)
-        return (0);
-    newbuf[0] = 0;
-    if (buf != 0)
-        strcat(newbuf, buf);
+    }
+
+    new_buf = malloc(sizeof(*new_buf) * (len + strlen(add) + 1));
+    if (new_buf == 0) {
+        return 0;
+    }
+    new_buf[0] = 0;
+    if (buf != 0) {
+        strcat(new_buf, buf);
+    }
+
     free(buf);
-    strcat(newbuf, add);
-    return (newbuf);
+    strcat(new_buf, add);
+    return new_buf;
 }
 
 void free_client(client_t *cli) {
     if (cli) {
-        if (cli->msg) free(cli->msg);
-        if (cli->fd > 0) close(cli->fd);
+        if (cli->msg) {
+            free(cli->msg);
+        }
+        if (cli->fd > 0) {
+            close(cli->fd);
+        }
         free(cli);
     }
 }
 
 client_t *add_client(server_t *s, int fd) {
     client_t *cli = (client_t *) malloc(sizeof(client_t));
-    if (!cli) fatal_error(s);
+    if (!cli) {
+        fatal_error(s);
+    }
     bzero(cli, sizeof(client_t));
     cli->fd = fd;
     cli->id = s->counter++;
@@ -105,8 +119,9 @@ client_t *add_client(server_t *s, int fd) {
 client_t *find_client(server_t *s, int fd) {
     client_t *tmp = s->head;
 
-    while (tmp && tmp->fd != fd)
+    while (tmp && tmp->fd != fd) {
         tmp = tmp->next;
+    }
     return tmp;
 }
 
@@ -119,10 +134,12 @@ void remove_client(server_t *s, int fd) {
         tmp = tmp->next;
     }
     if (tmp) {
-        if (prev)
+        if (prev) {
             prev->next = tmp->next;
-        else
+        } else {
             s->head = tmp->next;
+        }
+
         free_client(tmp);
     }
 }
@@ -135,6 +152,7 @@ void delete_all(server_t *s) {
         tmp = tmp->next;
         free_client(cache);
     }
+
     if (s->sockfd > 0) {
         close(s->sockfd);
         s->sockfd = -1;
@@ -144,17 +162,20 @@ void delete_all(server_t *s) {
 }
 
 void fatal_error(server_t *s) {
-    delete_all
-(s);
+    delete_all(s);
     write(2, "Fatal error\n", 12);
     exit(1);
 }
 
 void send_notification(server_t *s, int fd, char *msg) {
     client_t *cli = s->head;
+
     while (cli) {
-        if (FD_ISSET(cli->fd, &s->writefds) && cli->fd != fd)
-            if (send(cli->fd, msg, strlen(msg), 0) < 0) fatal_error(s);
+        if (FD_ISSET(cli->fd, &s->writefds) && cli->fd != fd) {
+            if (send(cli->fd, msg, strlen(msg), 0) < 0) {
+                fatal_error(s);
+            }
+        }
         cli = cli->next;
     }
 }
@@ -162,8 +183,7 @@ void send_notification(server_t *s, int fd, char *msg) {
 void send_message(server_t *s, client_t *cli) {
     char buf[127];
     char *msg;
-    while (extract_message(&cli->msg, &msg))
-    {
+    while (extract_message(&cli->msg, &msg)) {
         if (FD_ISSET(cli->fd, &s->writefds)) {
             sprintf(buf, "client %d: ", cli->id);
             send_notification(s, cli->fd, buf);
@@ -174,17 +194,18 @@ void send_message(server_t *s, client_t *cli) {
 }
 
 void deregister_client(server_t *s, int fd, int cli_id) {
-    char buf[127];
-    sprintf(buf, "server: client %d just left\n", cli_id);
-    send_notification(s, fd, buf);
+    printf("server: client %d just left on %d\n", cli_id, s->port);
     FD_CLR(fd, &s->active_fds);
     remove_client(s, fd);
+    connected_devices--;
 }
 
 void process_message(server_t *s, int fd) {
     char buf[4096];
     client_t *cli = find_client(s, fd);
-    if (!cli) return;
+    if (!cli) {
+        return;
+    }
     int read_bytes = recv(fd, buf, sizeof(buf) - 1, 0);
     if (read_bytes <= 0) {
         deregister_client(s, fd, cli->id);
@@ -200,10 +221,13 @@ void register_client(server_t *s, int fd) {
     char buf[127];
     if (!cli) fatal_error(s);
     FD_SET(cli->fd, &s->active_fds);
-    if (cli->fd > s->max_fd)
+    if (cli->fd > s->max_fd) {
         s->max_fd = cli->fd;
+    }
+    printf("server: client %d just arrived on port %d\n", cli->id, s->port);
     sprintf(buf, "server: client %d just arrived\n", cli->id);
     send_notification(s, fd, buf);
+    connected_devices++;
 }
 
 void accept_registration(server_t *s) {
@@ -211,24 +235,25 @@ void accept_registration(server_t *s) {
 
     socklen_t len = sizeof(cli);
     int fd = accept(s->sockfd, (struct sockaddr *)&cli, &len);
-    if (fd < 0) fatal_error(s);
+    if (fd < 0) {
+        fatal_error(s);
+    }
     register_client(s, fd);
 }
 
 void monitor_FDs(server_t *s) {
     if (select(s->max_fd + 1, &s->readfds, &s->writefds, NULL, NULL) < 0) fatal_error(s);
     int fd = 0;
-    while (fd <= s->max_fd)
-    {
-        if (FD_ISSET(fd, &s->readfds))
-            (fd == s->sockfd) ? accept_registration(s) : process_message(s, fd);
+    while (fd <= s->max_fd) {
+        if (FD_ISSET(fd, &s->readfds)) {
+            (fd == s->sockfd && (s->port != SOURCE_PORT || connected_devices < 1)) ? accept_registration(s) : process_message(s, fd);
+        }
         fd++;
     }
 }
 
 void handle_connection(server_t *s) {
-    while (1)
-    {
+    while (1) {
         s->readfds = s->active_fds;
         s->writefds = s->active_fds;
         monitor_FDs(s);
@@ -236,10 +261,13 @@ void handle_connection(server_t *s) {
 }
 
 void bind_and_listen(server_t *s) {
-    (void)s;
-    if ((bind(s->sockfd, (const struct sockaddr *)&s->addr, sizeof(s->addr)))) fatal_error(s);
+    if ((bind(s->sockfd, (const struct sockaddr *)&s->addr, sizeof(s->addr)))) {
+        fatal_error(s);
+    }
     printf("Server is listening on port %d\n", s->port);
-    if (listen(s->sockfd, SOMAXCONN)) fatal_error(s);
+    if (listen(s->sockfd, SOMAXCONN)) {
+        fatal_error(s);
+    }
 }
 
 void configure_addr(server_t *s) {
@@ -251,7 +279,9 @@ void configure_addr(server_t *s) {
 
 void create_socket(server_t *s) {
     s->sockfd = socket(AF_INET, SOCK_STREAM, 0); 
-    if (s->sockfd < 0)  fatal_error(s);
+    if (s->sockfd < 0)  {
+        fatal_error(s);
+    }
 
     FD_SET(s->sockfd, &s->active_fds);
     s->max_fd = s->sockfd;
@@ -259,7 +289,9 @@ void create_socket(server_t *s) {
 
 server_t *initialise_server(int port) {
     server_t *s = (server_t *)malloc(sizeof(server_t));
-    if (!s) fatal_error(NULL);
+    if (!s) {
+        fatal_error(NULL);
+    }
     bzero(s, sizeof(server_t));
     FD_ZERO(&s->active_fds);
     FD_ZERO(&s->readfds);
@@ -269,6 +301,8 @@ server_t *initialise_server(int port) {
 }
 
 int main() {
+    connected_devices = 0;
+
     pid_t pid = fork();
     if (pid < 0) {
         perror("Fork failed");
@@ -281,8 +315,7 @@ int main() {
         configure_addr(serv);
         bind_and_listen(serv);
         handle_connection(serv);
-        delete_all
-    (serv);
+        delete_all(serv);
     }
     return (0);
 }
