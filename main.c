@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <unistd.h>
 #include <netdb.h>
 #include <sys/socket.h>
@@ -15,8 +16,6 @@
  * This code is a modified version of his work, which can be found at:
  * https://medium.com/@oduwoledare/server-side-story-creating-a-multi-client-tcp-server-with-c-and-select-3692db1a8ca3)
 */
-
-int connected_devices;
 
 typedef struct client {
     int fd;
@@ -34,6 +33,85 @@ typedef struct server {
     struct sockaddr_in addr;
     client_t *head;
 } server_t;
+
+int connected_devices;
+server_t *serv;
+
+/*
+ * Remove after debugging
+ * Valkmit/Paxdiablo: https://stackoverflow.com/questions/7775991/how-to-get-hexdump-of-a-structure-data
+ */
+void hex_dump(const char * desc, const void * addr, const int len, int perLine) {
+    // Silently ignore silly per-line values.
+
+    if (perLine < 4 || perLine > 64) perLine = 16;
+
+    int i;
+    unsigned char buff[perLine+1];
+    const unsigned char * pc = (const unsigned char *)addr;
+
+    // Output description if given.
+
+    if (desc != NULL) printf ("%s:\n", desc);
+
+    // Length checks.
+
+    if (len == 0) {
+        printf("  ZERO LENGTH\n");
+        return;
+    }
+    if (len < 0) {
+        printf("  NEGATIVE LENGTH: %d\n", len);
+        return;
+    }
+
+    // Process every byte in the data.
+
+    for (i = 0; i < len; i++) {
+        // Multiple of perLine means new or first line (with line offset).
+
+        if ((i % perLine) == 0) {
+            // Only print previous-line ASCII buffer for lines beyond first.
+
+            if (i != 0) printf ("  %s\n", buff);
+
+            // Output the offset of current line.
+
+            printf ("  %04x ", i);
+        }
+
+        // Now the hex code for the specific character.
+
+        printf (" %02x", pc[i]);
+
+        // And buffer a printable ASCII character for later.
+
+        if ((pc[i] < 0x20) || (pc[i] > 0x7e)) // isprint() may be better.
+            buff[i % perLine] = '.';
+        else
+            buff[i % perLine] = pc[i];
+        buff[(i % perLine) + 1] = '\0';
+    }
+
+    // Pad out last line if not exactly perLine characters.
+
+    while ((i % perLine) != 0) {
+        printf ("   ");
+        i++;
+    }
+
+    // And print the final ASCII buffer.
+
+    printf ("  %s\n", buff);
+}
+
+void delete_all(server_t *s);
+
+void singal_handler(int sig)  { 
+    printf("Caught signal %d\n", sig);
+    delete_all(serv); // Assuming delete_all handles NULL safely
+    exit(sig);
+} 
 
 void fatal_error(server_t *s);
 
@@ -170,6 +248,8 @@ void fatal_error(server_t *s) {
 void send_notification(server_t *s, int fd, char *msg) {
     client_t *cli = s->head;
 
+    hex_dump("Packet received", msg, strlen(msg), 16);
+
     while (cli) {
         if (FD_ISSET(cli->fd, &s->writefds) && cli->fd != fd) {
             if (send(cli->fd, msg, strlen(msg), 0) < 0) {
@@ -301,6 +381,8 @@ server_t *initialise_server(int port) {
 }
 
 int main() {
+    signal(SIGINT, singal_handler); 
+
     connected_devices = 0;
 
     pid_t pid = fork();
@@ -309,7 +391,7 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    server_t *serv = initialise_server(pid > 0 ? SOURCE_PORT : DEST_PORT);
+    serv = initialise_server(pid > 0 ? SOURCE_PORT : DEST_PORT);
     if (serv) {
         create_socket(serv);
         configure_addr(serv);
