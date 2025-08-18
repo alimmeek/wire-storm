@@ -10,24 +10,30 @@
 #define SOURCE_PORT 33333
 #define DEST_PORT 44444
 
-typedef struct s_client {
+/* 
+ * Credit to Oduwole Dare for the original implementation of this multi-client TCP server.
+ * This code is a modified version of his work, which can be found at:
+ * https://medium.com/@oduwoledare/server-side-story-creating-a-multi-client-tcp-server-with-c-and-select-3692db1a8ca3)
+*/
+
+typedef struct client {
     int fd;
     int id;
     char *msg;
-    struct s_client *next;
-} t_client;
+    struct client *next;
+} client_t;
 
-typedef struct s_server {
+typedef struct server {
     int sockfd;
     int max_fd;
     int port;
     int counter;
     fd_set readfds, writefds, active_fds;
     struct sockaddr_in addr;
-    t_client *head;
-} t_server;
+    client_t *head;
+} server_t;
 
-void fatalError(t_server *s);
+void fatal_error(server_t *s);
 
 int extract_message(char **buf, char **msg) {
     char *newbuf;
@@ -76,7 +82,7 @@ char *str_join(char *buf, char *add) {
     return (newbuf);
 }
 
-void freeClient(t_client *cli) {
+void free_client(client_t *cli) {
     if (cli) {
         if (cli->msg) free(cli->msg);
         if (cli->fd > 0) close(cli->fd);
@@ -84,10 +90,10 @@ void freeClient(t_client *cli) {
     }
 }
 
-t_client *addClient(t_server *s, int fd) {
-    t_client *cli = (t_client *)malloc(sizeof(t_client));
-    if (!cli) fatalError(s);
-    bzero(cli, sizeof(t_client));
+client_t *add_client(server_t *s, int fd) {
+    client_t *cli = (client_t *) malloc(sizeof(client_t));
+    if (!cli) fatal_error(s);
+    bzero(cli, sizeof(client_t));
     cli->fd = fd;
     cli->id = s->counter++;
     cli->msg = NULL;
@@ -96,17 +102,17 @@ t_client *addClient(t_server *s, int fd) {
     return cli;
 }
 
-t_client *findClient(t_server *s, int fd) {
-    t_client *tmp = s->head;
+client_t *find_client(server_t *s, int fd) {
+    client_t *tmp = s->head;
 
     while (tmp && tmp->fd != fd)
         tmp = tmp->next;
     return tmp;
 }
 
-void removeClient(t_server *s, int fd) {
-    t_client *tmp = s->head;
-    t_client *prev = NULL;
+void remove_client(server_t *s, int fd) {
+    client_t *tmp = s->head;
+    client_t *prev = NULL;
 
     while (tmp && tmp->fd != fd) {
         prev = tmp;
@@ -117,17 +123,17 @@ void removeClient(t_server *s, int fd) {
             prev->next = tmp->next;
         else
             s->head = tmp->next;
-        freeClient(tmp);
+        free_client(tmp);
     }
 }
 
-void deleteAll(t_server *s) {
-    t_client *tmp = s->head;
+void delete_all(server_t *s) {
+    client_t *tmp = s->head;
 
     while (tmp) {
-        t_client *cache = tmp;
+        client_t *cache = tmp;
         tmp = tmp->next;
-        freeClient(cache);
+        free_client(cache);
     }
     if (s->sockfd > 0) {
         close(s->sockfd);
@@ -137,123 +143,124 @@ void deleteAll(t_server *s) {
     s = NULL;
 }
 
-void fatalError(t_server *s) {
-    deleteAll(s);
+void fatal_error(server_t *s) {
+    delete_all
+(s);
     write(2, "Fatal error\n", 12);
     exit(1);
 }
 
-void sendNotification(t_server *s, int fd, char *msg) {
-    t_client *cli = s->head;
+void send_notification(server_t *s, int fd, char *msg) {
+    client_t *cli = s->head;
     while (cli) {
         if (FD_ISSET(cli->fd, &s->writefds) && cli->fd != fd)
-            if (send(cli->fd, msg, strlen(msg), 0) < 0) fatalError(s);
+            if (send(cli->fd, msg, strlen(msg), 0) < 0) fatal_error(s);
         cli = cli->next;
     }
 }
 
-void sendMessage(t_server *s, t_client *cli) {
+void send_message(server_t *s, client_t *cli) {
     char buf[127];
     char *msg;
     while (extract_message(&cli->msg, &msg))
     {
         if (FD_ISSET(cli->fd, &s->writefds)) {
             sprintf(buf, "client %d: ", cli->id);
-            sendNotification(s, cli->fd, buf);
-            sendNotification(s, cli->fd, msg);
+            send_notification(s, cli->fd, buf);
+            send_notification(s, cli->fd, msg);
             free(msg);
         }
     }
 }
 
-void deregisterClient(t_server *s, int fd, int cli_id) {
+void deregister_client(server_t *s, int fd, int cli_id) {
     char buf[127];
     sprintf(buf, "server: client %d just left\n", cli_id);
-    sendNotification(s, fd, buf);
+    send_notification(s, fd, buf);
     FD_CLR(fd, &s->active_fds);
-    removeClient(s, fd);
+    remove_client(s, fd);
 }
 
-void processMessage(t_server *s, int fd) {
+void process_message(server_t *s, int fd) {
     char buf[4096];
-    t_client *cli = findClient(s, fd);
+    client_t *cli = find_client(s, fd);
     if (!cli) return;
     int read_bytes = recv(fd, buf, sizeof(buf) - 1, 0);
     if (read_bytes <= 0) {
-        deregisterClient(s, fd, cli->id);
+        deregister_client(s, fd, cli->id);
     } else {
         buf[read_bytes] = '\0';
         cli->msg = str_join(cli->msg, buf);
-        sendMessage(s, cli);
+        send_message(s, cli);
     }
 }
 
-void registerClient(t_server *s, int fd) {
-    t_client *cli = addClient(s, fd);
+void register_client(server_t *s, int fd) {
+    client_t *cli = add_client(s, fd);
     char buf[127];
-    if (!cli) fatalError(s);
+    if (!cli) fatal_error(s);
     FD_SET(cli->fd, &s->active_fds);
     if (cli->fd > s->max_fd)
         s->max_fd = cli->fd;
     sprintf(buf, "server: client %d just arrived\n", cli->id);
-    sendNotification(s, fd, buf);
+    send_notification(s, fd, buf);
 }
 
-void acceptRegistration(t_server *s) {
+void accept_registration(server_t *s) {
     struct sockaddr_in  cli; 
 
     socklen_t len = sizeof(cli);
     int fd = accept(s->sockfd, (struct sockaddr *)&cli, &len);
-    if (fd < 0) fatalError(s);
-    registerClient(s, fd);
+    if (fd < 0) fatal_error(s);
+    register_client(s, fd);
 }
 
-void monitorFDs(t_server *s) {
-    if (select(s->max_fd + 1, &s->readfds, &s->writefds, NULL, NULL) < 0) fatalError(s);
+void monitor_FDs(server_t *s) {
+    if (select(s->max_fd + 1, &s->readfds, &s->writefds, NULL, NULL) < 0) fatal_error(s);
     int fd = 0;
     while (fd <= s->max_fd)
     {
         if (FD_ISSET(fd, &s->readfds))
-            (fd == s->sockfd) ? acceptRegistration(s) : processMessage(s, fd);
+            (fd == s->sockfd) ? accept_registration(s) : process_message(s, fd);
         fd++;
     }
 }
 
-void handleCon(t_server *s) {
+void handle_connection(server_t *s) {
     while (1)
     {
         s->readfds = s->active_fds;
         s->writefds = s->active_fds;
-        monitorFDs(s);
+        monitor_FDs(s);
     }
 }
 
-void bindAndListen(t_server *s) {
+void bind_and_listen(server_t *s) {
     (void)s;
-    if ((bind(s->sockfd, (const struct sockaddr *)&s->addr, sizeof(s->addr)))) fatalError(s);
+    if ((bind(s->sockfd, (const struct sockaddr *)&s->addr, sizeof(s->addr)))) fatal_error(s);
     printf("Server is listening on port %d\n", s->port);
-    if (listen(s->sockfd, SOMAXCONN)) fatalError(s);
+    if (listen(s->sockfd, SOMAXCONN)) fatal_error(s);
 }
 
-void configAddr(t_server *s) {
+void configure_addr(server_t *s) {
     bzero(&s->addr, sizeof(s->addr)); 
     s->addr.sin_family = AF_INET; 
     s->addr.sin_addr.s_addr = htonl(2130706433);
     s->addr.sin_port = htons(s->port); 
 }
 
-void createSock(t_server *s) {
+void create_socket(server_t *s) {
     s->sockfd = socket(AF_INET, SOCK_STREAM, 0); 
-    if (s->sockfd < 0)  fatalError(s);
+    if (s->sockfd < 0)  fatal_error(s);
 
     FD_SET(s->sockfd, &s->active_fds);
     s->max_fd = s->sockfd;
 }
 
-t_server *initServer(int port) {
-    t_server *s = (t_server *)malloc(sizeof(t_server));
-    if (!s) fatalError(NULL);
-    bzero(s, sizeof(t_server));
+server_t *initialise_server(int port) {
+    server_t *s = (server_t *)malloc(sizeof(server_t));
+    if (!s) fatal_error(NULL);
+    bzero(s, sizeof(server_t));
     FD_ZERO(&s->active_fds);
     FD_ZERO(&s->readfds);
     FD_ZERO(&s->writefds);
@@ -268,13 +275,14 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    t_server *serv = initServer(pid > 0 ? SOURCE_PORT : DEST_PORT);
+    server_t *serv = initialise_server(pid > 0 ? SOURCE_PORT : DEST_PORT);
     if (serv) {
-        createSock(serv);
-        configAddr(serv);
-        bindAndListen(serv);
-        handleCon(serv);
-        deleteAll(serv);
+        create_socket(serv);
+        configure_addr(serv);
+        bind_and_listen(serv);
+        handle_connection(serv);
+        delete_all
+    (serv);
     }
     return (0);
 }
