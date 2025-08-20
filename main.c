@@ -6,10 +6,13 @@
 #include <unistd.h>
 #include <netdb.h>
 #include <sys/socket.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
 #include <netinet/in.h>
 
 #define SOURCE_PORT 33333
 #define DEST_PORT 44444
+#define MAX_MSG_SIZE 1024
 
 /* 
  * Credit to Oduwole Dare for the original implementation of this multi-client TCP server.
@@ -35,7 +38,13 @@ typedef struct server {
     client_t *head;
 } server_t;
 
-int connected_devices;
+typedef struct msg_buffer {
+    long msg_type;
+    size_t msg_len;
+    char msg_text[MAX_MSG_SIZE];
+} message_t;
+
+int connected_devices, msgid;
 server_t *serv;
 
 /*
@@ -111,6 +120,7 @@ void delete_all(server_t *s);
 void signal_handler(int sig)  { 
     printf("Caught signal %d\n", sig);
     delete_all(serv);
+    msgctl(msgid, IPC_RMID, NULL);
     exit(sig);
 } 
 
@@ -194,32 +204,33 @@ void delete_all(server_t *s) {
 
 void fatal_error(server_t *s) {
     delete_all(s);
+    msgctl(msgid, IPC_RMID, NULL);
     printf("Fatal error\n");   
     exit(1);
 }
 
 
-// Issue is here since need to pass to destination port - IPC needed
 void send_notification(server_t *s, int fd, char *msg, size_t msg_len) {
-    client_t *cli = s->head;
+    message_t message;
+    message.msg_type = 1;
 
-    hex_dump("Packet received", msg, msg_len, 16);
+    if (msg_len > MAX_MSG_SIZE) {
+        fprintf(stderr, "Message too large for queue\n");
+        return;
+    }
 
-    while (cli) {
-        if (FD_ISSET(cli->fd, &s->writefds) && cli->fd != fd) {
-            ssize_t sent = send(cli->fd, msg, msg_len, 0);
-            if (sent < 0) {
-                fatal_error(s);
-            }
-        }
-        cli = cli->next;
+    message.msg_len = msg_len;
+    memcpy(message.msg_text, msg, msg_len);
+
+    if (msgsnd(msgid, &message, sizeof(size_t) + msg_len, 0) == -1) {
+        perror("msgsnd");
+        exit(EXIT_FAILURE);
     }
 }
 
-
 void send_message(server_t *s, client_t *cli) {
     if (cli->msg && cli->msg_len > 0) {
-        if (FD_ISSET(cli->fd, &s->writefds) && validate_message(cli->msg)) {
+        if (validate_message(cli->msg)) {
             send_notification(s, cli->fd, cli->msg, cli->msg_len);
         }
         free(cli->msg);
@@ -268,7 +279,9 @@ void process_message(server_t *s, int fd) {
 void register_client(server_t *s, int fd) {
     client_t *cli = add_client(s, fd);
     char buf[127];
-    if (!cli) fatal_error(s);
+    if (!cli) {
+        fatal_error(s);
+    }
     FD_SET(cli->fd, &s->active_fds);
     if (cli->fd > s->max_fd) {
         s->max_fd = cli->fd;
@@ -289,7 +302,9 @@ void accept_registration(server_t *s) {
 }
 
 void monitor_FDs(server_t *s) {
-    if (select(s->max_fd + 1, &s->readfds, &s->writefds, NULL, NULL) < 0) fatal_error(s);
+    if (select(s->max_fd + 1, &s->readfds, &s->writefds, NULL, NULL) < 0) {
+        fatal_error(s);
+    }
     int fd = 0;
     while (fd <= s->max_fd) {
         if (FD_ISSET(fd, &s->readfds)) {
@@ -306,6 +321,66 @@ void handle_connection(server_t *s) {
         monitor_FDs(s);
     }
 }
+
+static int send_all(int fd, const char *buf, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = send(fd, buf + off, len - off, 0);
+        if (n > 0) {
+            off += (size_t)n;
+            continue;
+        }
+        if (n < 0) {
+            if (errno == EINTR) continue;                   // retry
+            if (errno == EAGAIN || errno == EWOULDBLOCK)    // not ready now
+                return 0;
+            return -1; // other error
+        }
+        // n == 0 should not happen for send(); treat as would-block
+        return 0;
+    }
+    return 1;
+}
+
+void child_loop(server_t *s) {
+    message_t message;
+
+    while (1) {
+        fd_set rfds = s->active_fds;
+        struct timeval tv = {0, 10000}; // 10ms timeout to keep loop responsive
+
+        int ready = select(s->max_fd + 1, &rfds, NULL, NULL, &tv);
+        if (ready < 0) {
+            perror("select");
+            exit(EXIT_FAILURE);
+        }
+
+        // Handle any new client connections
+        if (FD_ISSET(s->sockfd, &rfds)) {
+            accept_registration(s);
+        }
+
+        // Broadcast messages from parent
+        ssize_t rcv_size = msgrcv(msgid, &message, sizeof(message) - sizeof(long), 1, IPC_NOWAIT);
+        if (rcv_size > 0) {
+            hex_dump("Child received", message.msg_text, message.msg_len, 16);
+
+            client_t *cli = s->head;
+            while (cli) {
+                int rc = send_all(cli->fd, message.msg_text, message.msg_len);
+                if (rc < 0) {
+                    // hard error on this socket – clean it up however your codebase does.
+                    fatal_error(s);
+                }
+                cli = cli->next;
+            }
+        } else if (rcv_size == -1 && errno != ENOMSG) {
+            perror("msgrcv");
+            exit(EXIT_FAILURE);
+        }
+    }
+}
+
 
 void bind_and_listen(server_t *s) {
     if ((bind(s->sockfd, (const struct sockaddr *)&s->addr, sizeof(s->addr)))) {
@@ -353,18 +428,28 @@ int main() {
     connected_devices = 0;
 
     pid_t pid = fork();
+
     if (pid < 0) {
         perror("Fork failed");
         exit(EXIT_FAILURE);
     }
+
+    key_t key;
+
+    key = ftok("wire-storm", 65);
+    msgid = msgget(key, 0666 | IPC_CREAT);
 
     serv = initialise_server(pid > 0 ? SOURCE_PORT : DEST_PORT);
     if (serv) {
         create_socket(serv);
         configure_addr(serv);
         bind_and_listen(serv);
-        handle_connection(serv);
+        if (pid > 0) {
+            handle_connection(serv);
+        } else {
+            child_loop(serv);
+        }
         delete_all(serv);
     }
-    return (0);
+    return 0;
 }
