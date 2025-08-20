@@ -12,7 +12,7 @@
 
 #define SOURCE_PORT 33333
 #define DEST_PORT 44444
-#define MAX_MSG_SIZE 1024
+#define MAX_MSG_SIZE 1024000
 
 /* 
  * Credit to Oduwole Dare for the original implementation of this multi-client TCP server.
@@ -44,7 +44,7 @@ typedef struct msg_buffer {
     char msg_text[MAX_MSG_SIZE];
 } message_t;
 
-int connected_devices, msgid;
+int msgid;
 server_t *serv;
 
 /*
@@ -121,6 +121,7 @@ void signal_handler(int sig)  {
     printf("Caught signal %d\n", sig);
     delete_all(serv);
     msgctl(msgid, IPC_RMID, NULL);
+
     exit(sig);
 } 
 
@@ -195,6 +196,7 @@ void delete_all(server_t *s) {
     }
 
     if (s->sockfd > 0) {
+        shutdown(s->sockfd, SHUT_RDWR);
         close(s->sockfd);
         s->sockfd = -1;
     }
@@ -243,7 +245,6 @@ void deregister_client(server_t *s, int fd, int cli_id) {
     printf("server: client %d just left on %d\n", cli_id, s->port);
     FD_CLR(fd, &s->active_fds);
     remove_client(s, fd);
-    connected_devices--;
 }
 
 void process_message(server_t *s, int fd) {
@@ -270,7 +271,7 @@ void process_message(server_t *s, int fd) {
         memcpy(cli->msg + cli->msg_len, buf, read_bytes);
         cli->msg_len += read_bytes;
 
-        hex_dump("Received message", cli->msg, cli->msg_len, 16);
+        // hex_dump("Received message", cli->msg, cli->msg_len, 16);
 
         send_message(s, cli);
     }
@@ -287,7 +288,6 @@ void register_client(server_t *s, int fd) {
         s->max_fd = cli->fd;
     }
     printf("server: client %d just arrived on port %d\n", cli->id, s->port);
-    connected_devices++;
 }
 
 void accept_registration(server_t *s) {
@@ -327,13 +327,16 @@ static int send_all(int fd, const char *buf, size_t len) {
     while (off < len) {
         ssize_t n = send(fd, buf + off, len - off, 0);
         if (n > 0) {
-            off += (size_t)n;
+            off += (size_t) n;
             continue;
         }
         if (n < 0) {
-            if (errno == EINTR) continue;                   // retry
-            if (errno == EAGAIN || errno == EWOULDBLOCK)    // not ready now
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 return 0;
+            }
             return -1; // other error
         }
         // n == 0 should not happen for send(); treat as would-block
@@ -363,7 +366,7 @@ void child_loop(server_t *s) {
         // Broadcast messages from parent
         ssize_t rcv_size = msgrcv(msgid, &message, sizeof(message) - sizeof(long), 1, IPC_NOWAIT);
         if (rcv_size > 0) {
-            hex_dump("Child received", message.msg_text, message.msg_len, 16);
+            // hex_dump("Child received", message.msg_text, message.msg_len, 16);
 
             client_t *cli = s->head;
             while (cli) {
@@ -381,11 +384,11 @@ void child_loop(server_t *s) {
 
 
 void bind_and_listen(server_t *s) {
-    if ((bind(s->sockfd, (const struct sockaddr *)&s->addr, sizeof(s->addr)))) {
+    if ((bind(s->sockfd, (const struct sockaddr *)&s->addr, sizeof(s->addr))) != 0) {
         fatal_error(s, "Failed to bind socket");
     }
     printf("server: listening on port %d\n", s->port);
-    if (listen(s->sockfd, SOMAXCONN)) {
+    if (listen(s->sockfd, SOMAXCONN) != 0) {
         fatal_error(s, "Failed to listen on socket");
     }
 }
@@ -393,7 +396,7 @@ void bind_and_listen(server_t *s) {
 void configure_addr(server_t *s) {
     bzero(&s->addr, sizeof(s->addr)); 
     s->addr.sin_family = AF_INET; 
-    s->addr.sin_addr.s_addr = htonl(2130706433);
+    s->addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     s->addr.sin_port = htons(s->port); 
 }
 
@@ -422,8 +425,6 @@ server_t *initialise_server(int port) {
 
 int main() {
     signal(SIGINT, signal_handler); 
-
-    connected_devices = 0;
 
     pid_t pid = fork();
 
