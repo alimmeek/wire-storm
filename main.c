@@ -124,7 +124,7 @@ void signal_handler(int sig)  {
     exit(sig);
 } 
 
-void fatal_error(server_t *s);
+void fatal_error(server_t *s, char *msg);
 
 int validate_message(char *msg) {
     return 1;
@@ -145,7 +145,7 @@ void free_client(client_t *cli) {
 client_t *add_client(server_t *s, int fd) {
     client_t *cli = (client_t *) malloc(sizeof(client_t));
     if (!cli) {
-        fatal_error(s);
+        fatal_error(s, "Failed to allocate memory for client");
     }
 
     bzero(cli, sizeof(client_t));
@@ -202,10 +202,10 @@ void delete_all(server_t *s) {
     s = NULL;
 }
 
-void fatal_error(server_t *s) {
+void fatal_error(server_t *s, char *msg) {
+    printf("Fatal error: %s\n", msg);
     delete_all(s);
     msgctl(msgid, IPC_RMID, NULL);
-    printf("Fatal error\n");   
     exit(1);
 }
 
@@ -264,7 +264,7 @@ void process_message(server_t *s, int fd) {
         // grow the message buffer
         cli->msg = realloc(cli->msg, cli->msg_len + read_bytes);
         if (!cli->msg) {
-            fatal_error(s);
+            fatal_error(s, "Failed to allocate memory for client message");
         }
 
         memcpy(cli->msg + cli->msg_len, buf, read_bytes);
@@ -280,7 +280,7 @@ void register_client(server_t *s, int fd) {
     client_t *cli = add_client(s, fd);
     char buf[127];
     if (!cli) {
-        fatal_error(s);
+        fatal_error(s, "Failed to register client");
     }
     FD_SET(cli->fd, &s->active_fds);
     if (cli->fd > s->max_fd) {
@@ -296,14 +296,14 @@ void accept_registration(server_t *s) {
     socklen_t len = sizeof(cli);
     int fd = accept(s->sockfd, (struct sockaddr *)&cli, &len);
     if (fd < 0) {
-        fatal_error(s);
+        fatal_error(s, "Failed to accept client connection");
     }
     register_client(s, fd);
 }
 
 void monitor_FDs(server_t *s) {
     if (select(s->max_fd + 1, &s->readfds, &s->writefds, NULL, NULL) < 0) {
-        fatal_error(s);
+        fatal_error(s, "select failed");
     }
     int fd = 0;
     while (fd <= s->max_fd) {
@@ -369,14 +369,12 @@ void child_loop(server_t *s) {
             while (cli) {
                 int rc = send_all(cli->fd, message.msg_text, message.msg_len);
                 if (rc < 0) {
-                    // hard error on this socket – clean it up however your codebase does.
-                    fatal_error(s);
+                    fatal_error(s, "Failed to send message to client");
                 }
                 cli = cli->next;
             }
         } else if (rcv_size == -1 && errno != ENOMSG) {
-            perror("msgrcv");
-            exit(EXIT_FAILURE);
+            fatal_error(s, "Failed to receive message from queue");
         }
     }
 }
@@ -384,11 +382,11 @@ void child_loop(server_t *s) {
 
 void bind_and_listen(server_t *s) {
     if ((bind(s->sockfd, (const struct sockaddr *)&s->addr, sizeof(s->addr)))) {
-        fatal_error(s);
+        fatal_error(s, "Failed to bind socket");
     }
     printf("server: listening on port %d\n", s->port);
     if (listen(s->sockfd, SOMAXCONN)) {
-        fatal_error(s);
+        fatal_error(s, "Failed to listen on socket");
     }
 }
 
@@ -402,7 +400,7 @@ void configure_addr(server_t *s) {
 void create_socket(server_t *s) {
     s->sockfd = socket(AF_INET, SOCK_STREAM, 0); 
     if (s->sockfd < 0)  {
-        fatal_error(s);
+        fatal_error(s, "Failed to create socket");
     }
 
     FD_SET(s->sockfd, &s->active_fds);
@@ -412,7 +410,7 @@ void create_socket(server_t *s) {
 server_t *initialise_server(int port) {
     server_t *s = (server_t *)malloc(sizeof(server_t));
     if (!s) {
-        fatal_error(NULL);
+        fatal_error(NULL, "Failed to allocate memory for server structure");
     }
     bzero(s, sizeof(server_t));
     FD_ZERO(&s->active_fds);
