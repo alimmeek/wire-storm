@@ -32,11 +32,13 @@ typedef struct server {
     client_t *head;
 } server_t;
 
-typedef struct msg_buffer {
+typedef struct {
     long msg_type;
-    size_t msg_len;
+    size_t frag_len;     // length of this fragment
+    size_t total_len;    // full message size
+    size_t offset;       // where this fragment belongs
     char msg_text[MAX_MSG_SIZE];
-} message_t;
+} fragment_t;
 
 typedef struct ctmp_packet {
     unsigned char magic;

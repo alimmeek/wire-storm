@@ -150,6 +150,8 @@ void bind_and_listen(server_t *s) {
     if ((bind(s->sockfd, (const struct sockaddr *)&s->addr, sizeof(s->addr))) != 0) {
         fatal_error(s, "Failed to bind socket");
     }
+
+
     printf("server: listening on port %d\n", s->port);
     if (listen(s->sockfd, SOMAXCONN) != 0) {
         fatal_error(s, "Failed to listen on socket");
@@ -171,6 +173,12 @@ void create_socket(server_t *s) {
 
     FD_SET(s->sockfd, &s->active_fds);
     s->max_fd = s->sockfd;
+
+    int optval = 1;
+
+    if (setsockopt(s->sockfd, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval)) < 0) {
+        fatal_error(s, "Failed to set socket options");
+    }
 }
 
 server_t *initialise_server(int port) {

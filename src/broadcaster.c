@@ -1,5 +1,7 @@
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <sys/socket.h>
@@ -33,34 +35,56 @@ static int send_all(int fd, const char *buf, size_t len) {
 }
 
 void bcast_loop(server_t *s) {
-    message_t message;
+    fragment_t frag;
+    char *assembly_buf = NULL;
+    size_t assembly_size = 0;
+    size_t received_so_far = 0;
 
     while (1) {
         fd_set rfds = s->active_fds;
-        struct timeval tv = {0, 10000}; // 10ms timeout to keep loop responsive
+        struct timeval tv = {0, 10000}; // 10ms timeout
 
         int ready = select(s->max_fd + 1, &rfds, NULL, NULL, &tv);
         if (ready < 0) {
-            fatal_error(s, "Select failed");
+            fatal_error(s, "select failed");
         }
 
-        // Handle any new client connections
+        // Handle new client connections
         if (FD_ISSET(s->sockfd, &rfds)) {
             accept_registration(s);
         }
 
-        // Broadcast messages from parent
-        ssize_t rcv_size = msgrcv(msgid, &message, sizeof(message) - sizeof(long), 1, IPC_NOWAIT);
+        // Handle fragments from queue
+        ssize_t rcv_size = msgrcv(msgid, &frag, sizeof(fragment_t) - sizeof(long), 1, IPC_NOWAIT);
         if (rcv_size > 0) {
-            // hex_dump("Child received", message.msg_text, message.msg_len, 16);
-
-            client_t *cli = s->head;
-            while (cli) {
-                int rc = send_all(cli->fd, message.msg_text, message.msg_len);
-                if (rc < 0) {
-                    fatal_error(s, "Failed to send message to client");
+            // Allocate assembly buffer if this is the first fragment
+            if (assembly_buf == NULL) {
+                assembly_buf = malloc(frag.total_len);
+                if (!assembly_buf) {
+                    fatal_error(s, "Failed to allocate memory for message assembly buffer");
                 }
-                cli = cli->next;
+                assembly_size = frag.total_len;
+                received_so_far = 0;
+            }
+
+            memcpy(assembly_buf + frag.offset, frag.msg_text, frag.frag_len);
+            received_so_far += frag.frag_len;
+
+            // When complete, broadcast
+            if (received_so_far >= assembly_size) {
+                client_t *cli = s->head;
+                while (cli) {
+                    int rc = send_all(cli->fd, assembly_buf, assembly_size);
+                    if (rc < 0) {
+                        fatal_error(s, "Failed to send message to client");
+                    }
+                    cli = cli->next;
+                }
+
+                free(assembly_buf);
+                assembly_buf = NULL;
+                assembly_size = 0;
+                received_so_far = 0;
             }
         } else if (rcv_size == -1 && errno != ENOMSG) {
             fatal_error(s, "Failed to receive message from queue");

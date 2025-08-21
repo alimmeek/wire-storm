@@ -8,10 +8,10 @@
 
 
 int validate_message(char *msg, size_t msg_len) {
-    for (int i = 0; i < msg_len; i++) {
-        printf("%02x ", (unsigned char)msg[i]);
-    }
-    printf("\n");
+    // for (int i = 0; i < msg_len; i++) {
+    //     printf("%02x ", (unsigned char)msg[i]);
+    // }
+    // printf("\n");
     ctmp_t *packet = (ctmp_t *) msg;
     if (packet->magic != CTMP_MAGIC) {
         printf("server: received packet has invalid magic number: %x\n", packet->magic);
@@ -57,19 +57,25 @@ void remove_client(server_t *s, int fd) {
 }
 
 void send_to_broadcast(server_t *s, int fd, char *msg, size_t msg_len) {
-    message_t message;
-    message.msg_type = 1;
+    size_t offset = 0;
 
-    if (msg_len > MAX_MSG_SIZE) {
-        fprintf(stderr, "Message too large for queue\n");
-        return;
-    }
+    while (offset < msg_len) {
+        size_t chunk_len = msg_len - offset;
+        if (chunk_len > MAX_MSG_SIZE) chunk_len = MAX_MSG_SIZE;
 
-    message.msg_len = msg_len;
-    memcpy(message.msg_text, msg, msg_len);
+        fragment_t frag;
+        frag.msg_type = 1;
+        frag.frag_len = chunk_len;
+        frag.total_len = msg_len;
+        frag.offset = offset;
 
-    if (msgsnd(msgid, &message, sizeof(size_t) + msg_len, 0) == -1) {
-        fatal_error(s, "Failed to send message into message queue");
+        memcpy(frag.msg_text, msg + offset, chunk_len);
+
+        if (msgsnd(msgid, &frag, sizeof(fragment_t) - sizeof(long), 0) == -1) {
+            fatal_error(s, "Failed to send message to message queue");
+        }
+
+        offset += chunk_len;
     }
 }
 
@@ -92,6 +98,7 @@ void deregister_client(server_t *s, int fd, int cli_id) {
 
 void process_message(server_t *s, int fd) {
     char buf[4096];
+    int read_bytes;
     client_t *cli = find_client(s, fd);
     if (!cli) {
         return;
@@ -99,23 +106,36 @@ void process_message(server_t *s, int fd) {
 
     printf("server: processing message from client %d (port %d)\n", cli->id, s->port);
 
-    int read_bytes = recv(fd, buf, sizeof(buf), 0);
-    if (read_bytes <= 0) {
-        deregister_client(s, fd, cli->id);
-    } else {
-        printf("server: received %d bytes from client %d (port %d)\n", read_bytes, cli->id, s->port);
+    while ((read_bytes = recv(fd, buf, sizeof(buf), 0)) > 0) {
 
-        // grow the message buffer
+        // append received bytes to client buffer
         cli->msg = realloc(cli->msg, cli->msg_len + read_bytes + 1);
         if (!cli->msg) {
             fatal_error(s, "Failed to allocate memory for client message");
         }
 
+        printf("server: received %d bytes from client %d\n", read_bytes, cli->id);
         memcpy(cli->msg + cli->msg_len, buf, read_bytes);
         cli->msg_len += read_bytes;
-        cli->msg[cli->msg_len] = '\0'; 
+        cli->msg[cli->msg_len] = '\0';
 
-        send_message(s, cli);
+
+        if (read_bytes < sizeof(buf)) {
+            printf("server: received complete message from client %d\n", cli->id);
+            break; // assume end of message if less than buffer size
+        }
+    }
+
+    if (read_bytes < 0) {
+        fatal_error(s, "Failed to read from client socket");
+    } else {
+        if (cli->msg_len > 0) {
+            printf("server: processing complete message of %zu bytes from client %d\n", cli->msg_len, cli->id);
+            send_message(s, cli);
+        }
+
+        deregister_client(s, fd, cli->id);
+        return;
     }
 }
 
