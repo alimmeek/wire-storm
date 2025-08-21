@@ -29,6 +29,7 @@ void signal_handler(int sig) {
 
 int main() {
     signal(SIGINT, signal_handler); 
+    signal(SIGSEGV, signal_handler);
 
     pid_t pid = fork();
 

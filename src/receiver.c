@@ -7,7 +7,24 @@
 #include "utils.h"
 
 
-int validate_message(char *msg) {
+int validate_message(char *msg, size_t msg_len) {
+    for (int i = 0; i < msg_len; i++) {
+        printf("%02x ", (unsigned char)msg[i]);
+    }
+    printf("\n");
+    ctmp_t *packet = (ctmp_t *) msg;
+    if (packet->magic != CTMP_MAGIC) {
+        printf("server: received packet has invalid magic number: %x\n", packet->magic);
+        return 0;
+    }
+    if (packet->padding_byte != 0 || packet->padding_4_bytes != 0) {
+        printf("server: received packet has non-zero padding byte: %x\n", (packet->padding_byte == 0 ? packet->padding_4_bytes : packet->padding_byte));
+        return 0;
+    }
+    if (ntohs(packet->length_no) != msg_len - sizeof(ctmp_t)) {
+        printf("server: received packet has invalid length: %d, expected: %zu\n", packet->length_no, msg_len - sizeof(ctmp_t));
+        return 0;
+    }
     return 1;
 }
 
@@ -39,7 +56,7 @@ void remove_client(server_t *s, int fd) {
     }
 }
 
-void send_notification(server_t *s, int fd, char *msg, size_t msg_len) {
+void send_to_broadcast(server_t *s, int fd, char *msg, size_t msg_len) {
     message_t message;
     message.msg_type = 1;
 
@@ -52,15 +69,14 @@ void send_notification(server_t *s, int fd, char *msg, size_t msg_len) {
     memcpy(message.msg_text, msg, msg_len);
 
     if (msgsnd(msgid, &message, sizeof(size_t) + msg_len, 0) == -1) {
-        perror("msgsnd");
-        exit(EXIT_FAILURE);
+        fatal_error(s, "Failed to send message into message queue");
     }
 }
 
 void send_message(server_t *s, client_t *cli) {
     if (cli->msg && cli->msg_len > 0) {
-        if (validate_message(cli->msg)) {
-            send_notification(s, cli->fd, cli->msg, cli->msg_len);
+        if (validate_message(cli->msg, cli->msg_len) != 0) {
+            send_to_broadcast(s, cli->fd, cli->msg, cli->msg_len);
         }
         free(cli->msg);
         cli->msg = NULL;
@@ -90,15 +106,14 @@ void process_message(server_t *s, int fd) {
         printf("server: received %d bytes from client %d (port %d)\n", read_bytes, cli->id, s->port);
 
         // grow the message buffer
-        cli->msg = realloc(cli->msg, cli->msg_len + read_bytes);
+        cli->msg = realloc(cli->msg, cli->msg_len + read_bytes + 1);
         if (!cli->msg) {
             fatal_error(s, "Failed to allocate memory for client message");
         }
 
         memcpy(cli->msg + cli->msg_len, buf, read_bytes);
         cli->msg_len += read_bytes;
-
-        // hex_dump("Received message", cli->msg, cli->msg_len, 16);
+        cli->msg[cli->msg_len] = '\0'; 
 
         send_message(s, cli);
     }

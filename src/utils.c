@@ -10,10 +10,10 @@
  * Remove after debugging
  * Valkmit/Paxdiablo: https://stackoverflow.com/questions/7775991/how-to-get-hexdump-of-a-structure-data
  */
-void hex_dump(const char * desc, const void * addr, const int len, int perLine) {
+void hex_dump(const char * desc, const void * addr, const int len) {
     // Silently ignore silly per-line values.
 
-    if (perLine < 4 || perLine > 64) perLine = 16;
+    int perLine = len;
 
     int i;
     unsigned char buff[perLine+1];
@@ -43,10 +43,6 @@ void hex_dump(const char * desc, const void * addr, const int len, int perLine) 
             // Only print previous-line ASCII buffer for lines beyond first.
 
             if (i != 0) printf ("  %s\n", buff);
-
-            // Output the offset of current line.
-
-            // printf ("  %04x ", i);
         }
 
         // Now the hex code for the specific character.

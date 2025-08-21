@@ -12,6 +12,7 @@
 #define SOURCE_PORT 33333
 #define DEST_PORT 44444
 #define MAX_MSG_SIZE 4096
+#define CTMP_MAGIC 0xCC
 
 typedef struct client {
     int fd;
@@ -36,6 +37,14 @@ typedef struct msg_buffer {
     size_t msg_len;
     char msg_text[MAX_MSG_SIZE];
 } message_t;
+
+typedef struct ctmp_packet {
+    unsigned char magic;
+    unsigned char padding_byte;
+    unsigned short length_no;
+    unsigned int padding_4_bytes;
+    char data[];
+} ctmp_t;
 
 extern int msgid;
 extern server_t *serv;
