@@ -11,6 +11,13 @@
 #include "globals.h"
 #include "broadcaster.h"
 
+/**
+ * @brief Send all data in buf to client file descriptor, handling partial sends and interruptions.
+ * @param fd The file descriptor to send data to.
+ * @param buf The buffer containing data to send.
+ * @param len The length of data to send.
+ * @return 1 on success, 0 if would block, -1 on error.
+ */
 static int send_all(int fd, const char *buf, size_t len) {
     size_t off = 0;
     while (off < len) {
@@ -34,6 +41,12 @@ static int send_all(int fd, const char *buf, size_t len) {
     return 1;
 }
 
+
+/**
+ * @brief Main broadcasting loop: accepts new clients, receives message fragments from the queue,
+ * assembles complete messages, and broadcasts them to all connected clients.
+ * @param s Pointer to the server structure.
+ */
 void bcast_loop(server_t *s) {
     fragment_t frag;
     char *assembly_buf = NULL;

@@ -37,7 +37,7 @@ typedef struct {
     size_t frag_len;     // length of this fragment
     size_t total_len;    // full message size
     size_t offset;       // where this fragment belongs
-    char msg_text[MAX_MSG_SIZE];
+    char msg_text[MAX_MSG_SIZE]; // fragment data
 } fragment_t;
 
 typedef struct ctmp_packet {

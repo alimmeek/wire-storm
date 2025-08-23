@@ -3,7 +3,6 @@
 
 #include "globals.h"
 
-void hex_dump(const char * desc, const void * addr, const int len);
 void free_client(client_t *cli);
 void delete_all(server_t *s);
 void fatal_error(server_t *s, char *msg);

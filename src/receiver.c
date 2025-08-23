@@ -7,11 +7,13 @@
 #include "utils.h"
 
 
+/**
+ * @brief Validate the received message structure.
+ * @param msg Pointer to the message data.
+ * @param msg_len Length of the message data.
+ * @return 1 if valid, 0 otherwise.
+ */
 int validate_message(char *msg, size_t msg_len) {
-    // for (int i = 0; i < msg_len; i++) {
-    //     printf("%02x ", (unsigned char)msg[i]);
-    // }
-    // printf("\n");
     ctmp_t *packet = (ctmp_t *) msg;
     if (packet->magic != CTMP_MAGIC) {
         printf("server: received packet has invalid magic number: %x\n", packet->magic);
@@ -28,6 +30,12 @@ int validate_message(char *msg, size_t msg_len) {
     return 1;
 }
 
+/**
+ * @brief Find a client by its file descriptor.
+ * @param s Pointer to the server structure.
+ * @param fd File descriptor of the client to find.
+ * @return Pointer to the client structure if found, NULL otherwise.
+ */
 client_t *find_client(server_t *s, int fd) {
     client_t *tmp = s->head;
 
@@ -37,6 +45,11 @@ client_t *find_client(server_t *s, int fd) {
     return tmp;
 }
 
+/**
+ * @brief Remove a client from the server's linked list and free its resources.
+ * @param s Pointer to the server structure.
+ * @param fd File descriptor of the client to remove.
+ */
 void remove_client(server_t *s, int fd) {
     client_t *tmp = s->head;
     client_t *prev = NULL;
@@ -56,6 +69,13 @@ void remove_client(server_t *s, int fd) {
     }
 }
 
+/**
+ * @brief Send a message to the message queue in fragments if necessary.
+ * @param s Pointer to the server structure.
+ * @param fd File descriptor of the client sending the message.
+ * @param msg Pointer to the message data.
+ * @param msg_len Length of the message data.
+ */
 void send_to_broadcast(server_t *s, int fd, char *msg, size_t msg_len) {
     size_t offset = 0;
 
@@ -79,6 +99,11 @@ void send_to_broadcast(server_t *s, int fd, char *msg, size_t msg_len) {
     }
 }
 
+/**
+ * @brief Check message validity and send it to the message queue, then free the message.
+ * @param s Pointer to the server structure.
+ * @param cli Pointer to the client structure.
+ */
 void send_message(server_t *s, client_t *cli) {
     if (cli->msg && cli->msg_len > 0) {
         if (validate_message(cli->msg, cli->msg_len) != 0) {
@@ -90,15 +115,27 @@ void send_message(server_t *s, client_t *cli) {
     }
 }
 
+/**
+ * @brief Deregister a client by removing it from the server's linked list and updating the active file descriptor set.
+ * @param s Pointer to the server structure.
+ * @param fd File descriptor of the client to deregister.
+ * @param cli_id ID of the client to deregister.
+ */
 void deregister_client(server_t *s, int fd, int cli_id) {
     printf("server: client %d just left on %d\n", cli_id, s->port);
     FD_CLR(fd, &s->active_fds);
     remove_client(s, fd);
 }
 
+/**
+ * @brief Process incoming messages from a client.
+ * @param s Pointer to the server structure.
+ * @param fd File descriptor of the client.
+ */
 void process_message(server_t *s, int fd) {
     char buf[4096];
     int read_bytes;
+
     client_t *cli = find_client(s, fd);
     if (!cli) {
         return;
@@ -114,15 +151,13 @@ void process_message(server_t *s, int fd) {
             fatal_error(s, "Failed to allocate memory for client message");
         }
 
-        printf("server: received %d bytes from client %d\n", read_bytes, cli->id);
         memcpy(cli->msg + cli->msg_len, buf, read_bytes);
         cli->msg_len += read_bytes;
         cli->msg[cli->msg_len] = '\0';
 
-
+        // assume end of message if less than buffer size
         if (read_bytes < sizeof(buf)) {
-            printf("server: received complete message from client %d\n", cli->id);
-            break; // assume end of message if less than buffer size
+            break;
         }
     }
 
@@ -139,10 +174,15 @@ void process_message(server_t *s, int fd) {
     }
 }
 
+/**
+ * @brief Monitor file descriptors for activity using select.
+ * @param s Pointer to the server structure.
+ */
 void monitor_FDs(server_t *s) {
     if (select(s->max_fd + 1, &s->readfds, &s->writefds, NULL, NULL) < 0) {
         fatal_error(s, "select failed");
     }
+    
     int fd = 0;
     while (fd <= s->max_fd) {
         if (FD_ISSET(fd, &s->readfds)) {
@@ -152,6 +192,10 @@ void monitor_FDs(server_t *s) {
     }
 }
 
+/**
+ * @brief Main loop to handle incoming connections and messages.
+ * @param s Pointer to the server structure.
+ */
 void handle_connection(server_t *s) {
     while (1) {
         s->readfds = s->active_fds;
