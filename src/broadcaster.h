@@ -4,6 +4,7 @@
 #include "globals.h"
 
 static int send_all(int fd, const char *buf, size_t len);
+
 void bcast_loop(server_t *s);
 
 #endif

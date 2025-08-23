@@ -5,58 +5,8 @@
 #include <sys/ipc.h>
 
 #include "globals.h"
+#include "utils.h"
 
-
-/**
- * @brief Frees a client structure and its associated resources.
- * @param cli Pointer to the client structure to be freed.
- */
-void free_client(client_t *cli) {
-    if (cli) {
-        if (cli->msg) {
-            free(cli->msg);
-        }
-        if (cli->fd > 0) {
-            close(cli->fd);
-        }
-        free(cli);
-    }
-}
-
-/**
- * @brief Deletes all clients and frees the server structure.
- * @param s Pointer to the server structure.
- */
-void delete_all(server_t *s) {
-    client_t *tmp = s->head;
-
-    while (tmp) {
-        client_t *cache = tmp;
-        tmp = tmp->next;
-        free_client(cache);
-    }
-
-    if (s->sockfd > 0) {
-        shutdown(s->sockfd, SHUT_RDWR);
-        close(s->sockfd);
-        s->sockfd = -1;
-    }
-    free(s);
-    s = NULL;
-}
-
-/**
- * @brief Handles fatal errors (e.g., memory allocation fail) by printing an error message, cleaning up resources,
- * and exiting the program.
- * @param s Pointer to the server structure.
- * @param msg Error message to be printed.
- */
-void fatal_error(server_t *s, char *msg) {
-    printf("Fatal error: %s\n", msg);
-    delete_all(s);
-    msgctl(msgid, IPC_RMID, NULL);
-    exit(1);
-}
 
 /**
  * @brief Adds a new client to the server's client list.
@@ -80,21 +30,23 @@ client_t *add_client(server_t *s, int fd) {
 }
 
 /**
- * @brief Registers a new client by adding it to the server's client list and updating the file descriptor sets.
- * @param s Pointer to the server structure.
- * @param fd File descriptor of the new client.
+ * @brief Initializes the server structure, including file descriptor sets and port number.
+ * @param port Port number for the server to listen on.
+ * @return Pointer to the initialized server structure.
  */
-void register_client(server_t *s, int fd) {
-    client_t *cli = add_client(s, fd);
-    char buf[127];
-    if (!cli) {
-        fatal_error(s, "Failed to register client");
+server_t *initialise_server(int port) {
+    server_t *s = (server_t *)malloc(sizeof(server_t));
+    if (!s) {
+        fatal_error(NULL, "Failed to allocate memory for server structure");
     }
-    FD_SET(cli->fd, &s->active_fds);
-    if (cli->fd > s->max_fd) {
-        s->max_fd = cli->fd;
-    }
-    printf("server: client %d just arrived on port %d\n", cli->id, s->port);
+
+    bzero(s, sizeof(server_t));
+    FD_ZERO(&s->active_fds);
+    FD_ZERO(&s->readfds);
+    FD_ZERO(&s->writefds);
+    s->port = port;
+    
+    return s;
 }
 
 /**
@@ -160,21 +112,71 @@ void create_socket(server_t *s) {
 }
 
 /**
- * @brief Initializes the server structure, including file descriptor sets and port number.
- * @param port Port number for the server to listen on.
- * @return Pointer to the initialized server structure.
+ * @brief Deletes all clients and frees the server structure.
+ * @param s Pointer to the server structure.
  */
-server_t *initialise_server(int port) {
-    server_t *s = (server_t *)malloc(sizeof(server_t));
-    if (!s) {
-        fatal_error(NULL, "Failed to allocate memory for server structure");
+void delete_all(server_t *s) {
+    client_t *tmp = s->head;
+
+    while (tmp) {
+        client_t *cache = tmp;
+        tmp = tmp->next;
+        free_client(cache);
     }
 
-    bzero(s, sizeof(server_t));
-    FD_ZERO(&s->active_fds);
-    FD_ZERO(&s->readfds);
-    FD_ZERO(&s->writefds);
-    s->port = port;
-    
-    return s;
+    if (s->sockfd > 0) {
+        shutdown(s->sockfd, SHUT_RDWR);
+        close(s->sockfd);
+        s->sockfd = -1;
+    }
+    free(s);
+    s = NULL;
+}
+
+/**
+ * @brief Handles fatal errors (e.g., memory allocation fail) by printing an error message, cleaning up resources,
+ * and exiting the program.
+ * @param s Pointer to the server structure.
+ * @param msg Error message to be printed.
+ */
+void fatal_error(server_t *s, char *msg) {
+    printf("Fatal error: %s\n", msg);
+    delete_all(s);
+    msgctl(msgid, IPC_RMID, NULL);
+    exit(1);
+}
+
+/**
+ * @brief Frees a client structure and its associated resources.
+ * @param cli Pointer to the client structure to be freed.
+ */
+void free_client(client_t *cli) {
+    if (cli) {
+        if (cli->msg) {
+            free(cli->msg);
+        }
+        if (cli->fd > 0) {
+            close(cli->fd);
+        }
+        free(cli);
+    }
+}
+
+
+/**
+ * @brief Registers a new client by adding it to the server's client list and updating the file descriptor sets.
+ * @param s Pointer to the server structure.
+ * @param fd File descriptor of the new client.
+ */
+void register_client(server_t *s, int fd) {
+    client_t *cli = add_client(s, fd);
+    char buf[127];
+    if (!cli) {
+        fatal_error(s, "Failed to register client");
+    }
+    FD_SET(cli->fd, &s->active_fds);
+    if (cli->fd > s->max_fd) {
+        s->max_fd = cli->fd;
+    }
+    printf("server: client %d just arrived on port %d\n", cli->id, s->port);
 }
